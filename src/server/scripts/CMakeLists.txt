@@ -201,6 +201,24 @@ endforeach()
 # Add the dynamic script modules to the worldserver as dependency
 set(WORLDSERVER_DYNAMIC_SCRIPT_MODULES_DEPENDENCIES ${DYNAMIC_SCRIPT_MODULE_PROJECTS} PARENT_SCOPE)
 
+# modules/Bots lives outside the src/server/scripts glob, so it is wired in here
+# rather than discovered: collect its sources into the static scripts library and
+# append "Bots" to STATIC_SCRIPT_MODULES so the generated loader emits an
+# AddBotsScripts() call. tests/ is excluded because it has its own main(). This
+# is the module's only build-system touch point; guard it with -DBOTS_MODULE=0 to
+# restore a pristine core build.
+if (BOTS_MODULE)
+  set(BOTS_MODULE_PATH ${CMAKE_SOURCE_DIR}/modules/Bots)
+  if (EXISTS ${BOTS_MODULE_PATH}/src)
+    CollectSourceFiles(${BOTS_MODULE_PATH} BOTS_PRIVATE_SOURCES ${BOTS_MODULE_PATH}/tests)
+    CollectIncludeDirectories(${BOTS_MODULE_PATH} BOTS_INCLUDE_DIRS ${BOTS_MODULE_PATH}/tests)
+    list(APPEND PRIVATE_SOURCES ${BOTS_PRIVATE_SOURCES})
+    list(APPEND STATIC_SCRIPT_MODULES Bots)
+  else()
+    message(WARNING "BOTS_MODULE is on but ${BOTS_MODULE_PATH}/src is missing; skipping the Bots module.")
+  endif()
+endif()
+
 ConfigureScriptLoader("static" SCRIPT_MODULE_PRIVATE_SCRIPTLOADER OFF ${STATIC_SCRIPT_MODULES})
 
 add_library(scripts STATIC
@@ -217,6 +235,12 @@ target_link_libraries(scripts
 target_include_directories(scripts
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR})
+
+# modules/Bots include directories (its own src/), applied after the target
+# exists. Collected above, guarded by BOTS_MODULE.
+if (BOTS_INCLUDE_DIRS)
+  target_include_directories(scripts PRIVATE ${BOTS_INCLUDE_DIRS})
+endif()
 
 set_target_properties(scripts
   PROPERTIES

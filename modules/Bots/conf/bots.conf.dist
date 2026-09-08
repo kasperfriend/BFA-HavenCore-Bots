@@ -1,0 +1,186 @@
+###########################################
+# Bots module configuration               #
+###########################################
+#
+# These keys are read by the Bots module (modules/Bots). The core worldserver
+# reads a single worldserver.conf, so either:
+#
+#   * append this file's contents to worldserver.conf, or
+#   * if your build supports config includes, add:  Include "bots.conf"
+#
+# Every key has a working default; the module runs (inert) with none of them set.
+# The master switch Bots.Enable is 0 by default, so a fresh build does nothing
+# until an operator deliberately turns it on.
+
+# ============================================================================
+# MASTER SWITCH
+# ============================================================================
+#
+#    Bots.Enable
+#        Description: Master switch for the whole module.
+#                     0 = the module links, prints one line, and does nothing.
+#                     1 = the worker thread runs and bots can be created.
+#        Default:    0
+
+Bots.Enable = 0
+
+# ============================================================================
+# FEATURE GATES  (everything except Login is off)
+# ============================================================================
+#
+#    Bots.Features.<Name>
+#        Description: One gate per capability a ported bot could have. Iteration 1
+#                     enables exactly one of them (Login): a bot logs in and stands
+#                     where it was created, and does nothing else. Flipping a gate
+#                     is the only thing a later porting change should do.
+#        Default:     Login = 1, every other gate = 0
+
+Bots.Features.Login            = 1
+Bots.Features.Movement         = 0
+Bots.Features.Combat           = 0
+Bots.Features.Chat             = 0
+Bots.Features.Group            = 0
+Bots.Features.Quests           = 0
+Bots.Features.Loot             = 0
+Bots.Features.Inventory        = 0
+Bots.Features.Trade            = 0
+Bots.Features.Mail             = 0
+Bots.Features.AuctionHouse     = 0
+Bots.Features.Guild            = 0
+Bots.Features.Battlegrounds    = 0
+Bots.Features.DungeonFinder    = 0
+Bots.Features.SkillsTalents    = 0
+Bots.Features.ItemsEquipment   = 0
+Bots.Features.FollowMaster     = 0
+Bots.Features.RespondToInvites = 0
+
+# ============================================================================
+# NAMING AND ROSTER
+# ============================================================================
+#
+#    Bots.NamePrefix
+#        Description: Prefix for generated account and character names. Character
+#                     name = <Prefix><run-free suffix>, e.g. "Bot" -> BotA, BotB,
+#                     ... BotAB. The suffix never repeats a letter, so the core's
+#                     "no three consecutive identical letters" rule cannot fire.
+#                     Must be alphabetic, capitalised, contain no repeated letter,
+#                     and be 2..11 characters. A one-letter prefix is rejected
+#                     because it could complete a run (e.g. "X" + "XX").
+#        Default:     "Bot"
+
+Bots.NamePrefix = "Bot"
+
+#
+#    Bots.MaxBots
+#        Description: Hard cap on the number of managed bots. 0 means no cap.
+#        Default:     0
+
+Bots.MaxBots = 0
+
+# ============================================================================
+# TIMINGS  (milliseconds)
+# ============================================================================
+#
+#    Bots.LoginIntervalMs
+#        Description: Worker-thread tick interval. Also the resolution of every
+#                     other timer below. Must be > 0.
+#        Default:     1000
+
+Bots.LoginIntervalMs = 1000
+
+#
+#    Bots.LoginDelayMs
+#        Description: Pause between a bot reaching IN_WORLD and the next bot being
+#                     started, so a batch of logins does not hit the database at
+#                     once.
+#        Default:     2000
+
+Bots.LoginDelayMs = 2000
+
+#
+#    Bots.CharacterListDelayMs
+#        Description: Extra settle time allowed around the character-list step.
+#                     Must be > 0.
+#        Default:     1000
+
+Bots.CharacterListDelayMs = 1000
+
+#
+#    Bots.LoginTimeoutMs
+#        Description: How long a login state may wait for the core's asynchronous
+#                     callbacks before the attempt is abandoned and retried.
+#        Default:     30000
+
+Bots.LoginTimeoutMs = 30000
+
+#
+#    Bots.LoginRetryDelayMs
+#        Description: How long to stay in RetryPending before re-entering
+#                     provisioning.
+#        Default:     5000
+
+Bots.LoginRetryDelayMs = 5000
+
+#
+#    Bots.MaxLoginAttempts
+#        Description: Attempts before a bot gives up permanently. Must be >= 1.
+#        Default:     3
+
+Bots.MaxLoginAttempts = 3
+
+#
+#    Bots.KeepAliveIntervalMs
+#        Description: How often the worker re-arms each session's idle timer so
+#                     the core never sees it as idle and closes the socket.
+#        Default:     30000
+
+Bots.KeepAliveIntervalMs = 30000
+
+# ============================================================================
+# CHARACTER APPEARANCE
+# ============================================================================
+#
+#    Bots.DefaultRace / Bots.DefaultClass / Bots.DefaultGender
+#        Description: Race, class and gender id for created characters. The
+#                     defaults are Human (1) Warrior (1) male (0). Any valid
+#                     race/class combination the core's playercreateinfo supports
+#                     works; an invalid one fails Player::Create and the bot
+#                     retries then gives up.
+#        Default:     Race = 1, Class = 1, Gender = 0
+
+Bots.DefaultRace   = 1
+Bots.DefaultClass  = 1
+Bots.DefaultGender = 0
+
+#
+#    Bots.DefaultSkin / Bots.DefaultFace / Bots.DefaultHairStyle
+#    Bots.DefaultHairColor / Bots.DefaultFacialHairStyle
+#        Description: Appearance values, all 0 by default. The core validates them
+#                     against the character creation data and forces a recustomise
+#                     if they are out of range.
+#        Default:     0
+
+Bots.DefaultSkin            = 0
+Bots.DefaultFace            = 0
+Bots.DefaultHairStyle       = 0
+Bots.DefaultHairColor       = 0
+Bots.DefaultFacialHairStyle = 0
+
+# ============================================================================
+# ACCOUNT ROW
+# ============================================================================
+#
+#    Bots.AccountExpansion
+#        Description: Expansion level written to auth.account. 7 = Battle for
+#                     Azeroth, which unlocks allied races at char-enum.
+#        Default:     7
+
+Bots.AccountExpansion = 7
+
+#
+#    Bots.AccountOs
+#        Description: os column written to auth.account. "Wn64" keeps InitWarden a
+#                     documented no-op.
+#        Default:     "Wn64"
+
+Bots.AccountOs = "Wn64"

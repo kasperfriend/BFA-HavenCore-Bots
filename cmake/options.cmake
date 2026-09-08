@@ -33,6 +33,11 @@ foreach(SCRIPT_MODULE ${SCRIPT_MODULE_LIST})
   set_property(CACHE ${SCRIPT_MODULE_VARIABLE} PROPERTY STRINGS default disabled static dynamic)
 endforeach()
 
+# modules/Bots is compiled into the static `scripts` library when this is on.
+# It is a build-time switch only: the module also stays inert at runtime unless
+# Bots.Enable = 1 in worldserver.conf. See modules/Bots/docs/00-DESIGN.md.
+option(BOTS_MODULE      "Compile the modules/Bots player-bot module into the scripts" 1)
+
 option(TOOLS            "Build map/vmap/mmap extraction/assembler tools"              1)
 option(USE_SCRIPTPCH    "Use precompiled headers when compiling scripts"              1)
 option(USE_COREPCH      "Use precompiled headers when compiling servers"              1)
