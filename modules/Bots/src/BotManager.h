@@ -62,6 +62,11 @@ namespace Bots
         bool CharacterListRequested = false;
         bool PlayerLoginRequested = false;
 
+        // Accumulates tick time so KeepAlive runs at Bots.KeepAliveIntervalMs
+        // rather than every tick (a no-op reset is cheap, but there is no reason
+        // to do it a thousand times a second either).
+        uint32 KeepAliveAccumMs = 0;
+
         std::shared_ptr<BotSession> Session;
     };
 
@@ -111,6 +116,12 @@ namespace Bots
         void WorkerLoop();
         void TickBot(BotRecord& bot, uint32 diffMs);
         void ApplyAction(BotRecord& bot, BotPlanAction action);
+
+        /// Per-tick upkeep for a bot that already has a session: drain both
+        /// sockets' outbound queues so the core's SendPacket calls do not leak,
+        /// and re-arm the idle timer so WorldSession::Update never sees the
+        /// session as idle and closes the realm socket.
+        void Maintenance(BotRecord& bot, uint32 diffMs);
 
         // Action implementations, all on the worker thread.
         void DoProvision(BotRecord& bot);

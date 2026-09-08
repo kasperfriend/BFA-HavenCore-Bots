@@ -69,9 +69,6 @@ namespace Bots
         void SetSockets(std::shared_ptr<WorldSocket> realmSocket, std::shared_ptr<boost::asio::ip::tcp::socket> realmPeer,
             std::shared_ptr<WorldSocket> instanceSocket, std::shared_ptr<boost::asio::ip::tcp::socket> instancePeer);
 
-        std::shared_ptr<WorldSocket> const& GetRealmSocket() const { return _realmSocket; }
-        std::shared_ptr<WorldSocket> const& GetInstanceSocket() const { return _instanceSocket; }
-
         /// Adopts the core session pointer immediately after construction and
         /// before `World::AddSession`.
         void SetWorldSession(WorldSession* session) { _session = session; }
@@ -91,11 +88,19 @@ namespace Bots
         bool IsCharacterListReady() const { return _characterListReady; }
         bool IsInstanceLinked() const { return _instanceLinked; }
 
-        /// Observable login progress, read on the module thread. `GetPlayer()`
-        /// and `PlayerLoading()` are public (WorldSession.h:1070,1107) and are
-        /// written once by the world thread, so polling them is benign.
+        /// Best-effort liveness. The module holds the realm socket by
+        /// shared_ptr, so it outlives the WorldSession, and Socket::IsOpen reads
+        /// an std::atomic<bool> — checking it never dereferences the (possibly
+        /// deleted) session. The core closes the realm socket before it deletes a
+        /// session, so a closed socket means "stop touching _session". Under
+        /// normal operation the module keeps it open (KeepAlive) and the world
+        /// thread never deletes the session at all.
+        bool IsRealmSocketOpen() const;
+
+        /// Observable login progress, read on the module thread. `GetPlayer()` is
+        /// public (WorldSession.h:1107) and written once by the world thread when
+        /// the character finishes loading, so polling it is benign.
         bool HasPlayer() const;
-        bool IsPlayerLoading() const;
         bool IsPlayerInWorld() const;
 
         /// Runtime self-check (docs/00-DESIGN.md §9): the character the core

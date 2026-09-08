@@ -135,14 +135,14 @@ namespace Bots
         _session->ResetTimeOutTime();
     }
 
+    bool BotSession::IsRealmSocketOpen() const
+    {
+        return _realmSocket && _realmSocket->IsOpen();
+    }
+
     bool BotSession::HasPlayer() const
     {
         return _session && _session->GetPlayer() != nullptr;
-    }
-
-    bool BotSession::IsPlayerLoading() const
-    {
-        return _session && _session->PlayerLoading();
     }
 
     bool BotSession::IsPlayerInWorld() const

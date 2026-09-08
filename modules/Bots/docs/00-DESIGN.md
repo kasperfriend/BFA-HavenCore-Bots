@@ -269,13 +269,28 @@ Bot sockets are drained by the worker thread calling `BotSocket::Update()`.
 enqueue from `SendPacket`, one module thread dequeues. That is precisely the
 queue's contract, and no core `NetworkThread` ever sees these sockets.
 
-**Liveness.** The world thread owns the session's lifetime: it can `delete` it
-from `UpdateSessions` (`World.cpp:3126`) or from `AddSession_` (`World.cpp:283`).
-The module must never dereference a session it is not certain is alive. Each
-`BotSession` owns a `std::shared_ptr<BotSessionLiveness>` whose destructor sets
-an `std::atomic<bool>` to false; the module holds the matching `weak_ptr` and
-checks `lock()` plus the flag before every touch. No raw pointer is ever
-dereferenced after the flag drops.
+**Liveness.** The world thread owns the `WorldSession`'s lifetime, but it only
+deletes one whose realm socket has closed: `WorldSession::Update` returns false —
+and `UpdateSessions` then deletes the session — only once
+`m_Socket[CONNECTION_TYPE_REALM]` is null or closed (`WorldSession.cpp:481-499`).
+The module keeps that socket open (`KeepAlive` re-arms the idle timer so
+`IsConnectionIdle()` never fires, and the loopback peer is retained so the socket
+never errors), so under normal operation the session is never deleted and the
+question does not arise.
+
+For the cases the module does not control — a GM `.kick`, a logout, or shutdown —
+the module reads liveness from the socket it holds, never from the session:
+`BotSession::IsRealmSocketOpen()` calls `Socket::IsOpen()`, which reads an
+`std::atomic<bool>` (`Socket.h:140`), and the module owns the socket by
+`shared_ptr` so it outlives the `WorldSession`. Each tick reads that flag first;
+if it is false the module stops dereferencing `_session` and the plan retries.
+This is best effort: there remains a theoretical TOCTOU window in which the world
+thread closes the socket *and* deletes the session within the same tick, between
+the module's `IsOpen()` read and a subsequent `_session` dereference. It is
+narrow (it needs an external kick at that instant) and cannot occur without one,
+because the module never closes the socket itself. `docs/03-TESTING.md` lists it
+as a maintainer-verified item; the roadmap's wire-driven backend removes it by
+giving the bot a real session the core manages end to end.
 
 ---
 

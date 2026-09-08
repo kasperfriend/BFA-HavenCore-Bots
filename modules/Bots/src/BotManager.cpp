@@ -250,7 +250,10 @@ namespace Bots
             }
 
             for (auto& bot : snapshot)
+            {
                 TickBot(*bot, diffMs);
+                Maintenance(*bot, diffMs);
+            }
         }
     }
 
@@ -258,25 +261,53 @@ namespace Bots
     {
         bot.StateElapsedMs += diffMs;
 
+        // Liveness is read from the module-held realm socket, never from the
+        // WorldSession, so a session the world thread has closed (GM kick,
+        // logout, shutdown) is detected without dereferencing it. Once it reads
+        // closed we stop touching _session this tick and let the plan retry.
+        bool const sessionAlive = bot.Session && bot.Session->IsRealmSocketOpen();
+
         BotPlanInput input;
         input.LoginFeatureEnabled = BotConfig::IsFeatureEnabled(_config, BotFeature::Login);
         input.State = bot.State;
         input.SessionCreated = bot.SessionCreated;
-        input.SessionAlive = bot.Session != nullptr;
+        input.SessionAlive = sessionAlive;
         input.SessionAuthed = bot.SessionAuthed;
         input.CharacterListRequested = bot.CharacterListRequested;
-        input.CharacterListReady = bot.Session ? bot.Session->IsCharacterListReady() : false;
+        input.CharacterListReady = sessionAlive ? bot.Session->IsCharacterListReady() : false;
         input.CharacterGuidKnown = bot.CharacterGuidKnown;
         input.PlayerLoginRequested = bot.PlayerLoginRequested;
-        input.PlayerSetOnSession = bot.Session ? bot.Session->HasPlayer() : false;
-        input.PlayerInWorld = bot.Session ? bot.Session->IsPlayerInWorld() : false;
-        input.LoadedCharacterMatchesRequest = bot.Session ? bot.Session->LoadedCharacterMatchesRequest() : true;
+        input.PlayerSetOnSession = sessionAlive && bot.Session->HasPlayer();
+        input.PlayerInWorld = sessionAlive && bot.Session->IsPlayerInWorld();
+        input.LoadedCharacterMatchesRequest = sessionAlive ? bot.Session->LoadedCharacterMatchesRequest() : true;
         input.ElapsedMs = bot.StateElapsedMs;
         input.Attempt = bot.Attempt;
 
         BotPlanStep const step = BotLifecyclePlan::Advance(input, _config.StateTimeoutMs, _config.RetryDelayMs, _config.MaxLoginAttempts);
         bot.State = step.State;
         ApplyAction(bot, step.Action);
+    }
+
+    void BotManager::Maintenance(BotRecord& bot, uint32 diffMs)
+    {
+        if (!bot.Session)
+            return;
+
+        // DrainSockets touches only the module-held sockets, so it is safe even
+        // if the WorldSession is gone: it just drains and discards.
+        bot.Session->DrainSockets();
+
+        // KeepAlive dereferences the WorldSession, so gate it on the same
+        // liveness signal TickBot uses.
+        if (!bot.Session->IsRealmSocketOpen())
+            return;
+
+        bot.KeepAliveAccumMs += diffMs;
+        if (bot.KeepAliveAccumMs >= _config.KeepAliveIntervalMs)
+        {
+            bot.Session->KeepAlive();
+            bot.KeepAliveAccumMs = 0;
+        }
     }
 
     void BotManager::ApplyAction(BotRecord& bot, BotPlanAction action)
