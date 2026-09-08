@@ -26,9 +26,11 @@ idle timer). No client protocol, no crypto, no packets on the wire.
 2. `docs/03-TESTING.md` — what was actually run (41 standalone unit tests,
    passing) versus what needs the maintainer's machine (everything that touches
    the core, which was never compiled here).
-3. `docs/01-PROTOCOL-8.3.7.md` — the real login protocol and crypto, recorded for
+3. `TODO.md` — the actionable checklist of everything not yet built or run,
+   with the specific API/signature risks to confirm on a real build.
+4. `docs/01-PROTOCOL-8.3.7.md` — the real login protocol and crypto, recorded for
    the roadmap's wire-driven backend. Iteration 1 does not implement it.
-4. `docs/02-PORTING-GUIDE.md` — the 3.3.5a → 8.3.7 translation matrix and the
+5. `docs/02-PORTING-GUIDE.md` — the 3.3.5a → 8.3.7 translation matrix and the
    porting contract (one gate per behaviour).
 
 ## Building
