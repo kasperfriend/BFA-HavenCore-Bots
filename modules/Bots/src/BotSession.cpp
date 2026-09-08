@@ -89,8 +89,7 @@ namespace Bots
         // operator>> expects. FarClip only sets a view distance; the default the
         // client sends is used here.
         WorldPacket* login = new WorldPacket(CMSG_PLAYER_LOGIN, 24);
-        *login << _characterGuid;
-        login->append(float(1000.0f));
+        *login << _characterGuid << float(1000.0f);
         _session->QueuePacket(login);
     }
 

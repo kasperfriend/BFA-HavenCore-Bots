@@ -148,23 +148,30 @@ namespace Bots
         WorldPackets::Character::CharacterCreateInfo createInfo(characterName, config.Race, config.Class,
             config.Gender, config.Skin, config.Face, config.HairStyle, config.HairColor, config.FacialHairStyle, 0);
 
-        Player newChar(provisioningSession.get());
-        newChar.GetMotionMaster()->Initialize();
+        // Match the core's creation path exactly (CharacterHandler.cpp:745-749):
+        // a Player whose deleter runs CleanupsBeforeDelete, so a created character
+        // releases anything Create/SaveToDB attached before it is destroyed.
+        std::shared_ptr<Player> newChar(new Player(provisioningSession.get()), [](Player* ptr)
+        {
+            ptr->CleanupsBeforeDelete();
+            delete ptr;
+        });
+        newChar->GetMotionMaster()->Initialize();
 
         ObjectGuid::LowType guidLow = sObjectMgr->GetGenerator<HighGuid::Player>().Generate();
-        if (!newChar.Create(guidLow, &createInfo))
+        if (!newChar->Create(guidLow, &createInfo))
         {
             failure = "Player::Create failed for " + characterName + " (race " + std::to_string(config.Race) +
                 ", class " + std::to_string(config.Class) + ")";
             return false;
         }
 
-        newChar.SetAtLoginFlag(AT_LOGIN_FIRST);
-        newChar.SaveToDB(true);
+        newChar->SetAtLoginFlag(AT_LOGIN_FIRST);
+        newChar->SaveToDB(true);
 
-        characterGuid = newChar.GetGUID();
+        characterGuid = newChar->GetGUID();
         sCharacterCache->AddCharacterCacheEntry(characterGuid, accountId, characterName,
-            config.Gender, config.Race, config.Class, newChar.getLevel(), false);
+            config.Gender, config.Race, config.Class, newChar->getLevel(), false);
 
         TC_LOG_INFO("bots", "Provisioned character %s (%s) on account %u",
             characterName.c_str(), characterGuid.ToString().c_str(), accountId);
