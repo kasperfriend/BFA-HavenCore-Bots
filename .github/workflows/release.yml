@@ -23,6 +23,11 @@ on:
         options:
           - static
           - dynamic
+      bots:
+        description: 'Compile the modules/Bots player-bot module into the core (CMake BOTS_MODULE)'
+        required: false
+        default: true
+        type: boolean
       configure_only:
         description: 'Stop after CMake configure - toolchain smoke test, no compile and no zip'
         required: false
@@ -123,6 +128,7 @@ jobs:
       env:
         BOOST_ROOT: ${{ steps.install-boost.outputs.BOOST_ROOT }}
         SCRIPTS_MODE: ${{ inputs.scripts }}
+        BOTS_MODULE: ${{ inputs.bots }}
       shell: pwsh
       run: |
         $ErrorActionPreference = 'Stop'
@@ -139,7 +145,7 @@ jobs:
           "-DSCRIPTS=$env:SCRIPTS_MODE",
           # modules/Bots is compiled into the scripts library; it stays inert at
           # runtime until Bots.Enable = 1 (modules/Bots/README.md).
-          '-DBOTS_MODULE=1',
+          "-DBOTS_MODULE=$env:BOTS_MODULE",
           '-DNOJEM=0',
           '-DWITH_WARNINGS=0',
           "-DOPENSSL_ROOT_DIR=$env:OPENSSL_ROOT_DIR",
@@ -172,6 +178,7 @@ jobs:
       if: ${{ !inputs.configure_only }}
       env:
         SCRIPTS_MODE: ${{ inputs.scripts }}
+        BOTS_MODULE: ${{ inputs.bots }}
       shell: pwsh
       run: |
         $ErrorActionPreference = 'Stop'
@@ -230,11 +237,14 @@ jobs:
         New-Item -ItemType Directory -Force -Path $sqlUpdates | Out-Null
         Copy-Item -Path 'sql\updates\*' -Destination $sqlUpdates -Recurse -Force
 
-        # modules/Bots is compiled in but ships its own SQL and config template.
-        $botsSql = Join-Path $package 'Updater\sql\modules\Bots'
-        New-Item -ItemType Directory -Force -Path $botsSql | Out-Null
-        Copy-Item -Path 'modules\Bots\sql\*' -Destination $botsSql -Recurse -Force
-        Copy-Item -Path 'modules\Bots\conf\bots.conf.dist' -Destination $package -Force
+        # modules/Bots ships its own SQL and config template, but only when it
+        # was compiled into the core.
+        if ($env:BOTS_MODULE -eq 'true') {
+          $botsSql = Join-Path $package 'Updater\sql\modules\Bots'
+          New-Item -ItemType Directory -Force -Path $botsSql | Out-Null
+          Copy-Item -Path 'modules\Bots\sql\*' -Destination $botsSql -Recurse -Force
+          Copy-Item -Path 'modules\Bots\conf\bots.conf.dist' -Destination $package -Force
+        }
 
         # DataDir/LogsDir from worldserver.conf.dist, created empty: the core
         # does not create LogsDir itself, and ClientData is filled in by the
@@ -282,6 +292,16 @@ jobs:
         Set-Content -LiteralPath (Join-Path $package 'ClientData\README.txt') -Value $clientDataReadme -Encoding utf8
 
         $boostDir = Get-CacheValue 'Boost_DIR'
+        $botsNote = if ($env:BOTS_MODULE -eq 'true') {
+          @(
+            '  * modules/Bots is compiled in but disabled until its settings from',
+            '    bots.conf.dist are merged into worldserver.conf with Bots.Enable = 1,',
+            '    and Updater\sql\modules\Bots\rbac_bots_command.sql is imported into',
+            '    the auth database.'
+          ) -join "`n"
+        } else {
+          '  * modules/Bots is not part of this build (BOTS_MODULE=0).'
+        }
         $readme = @"
         BFA-HavenCore - Windows x64
         ===========================
@@ -294,7 +314,7 @@ jobs:
           bnetserver      $($versions['bnetserver.exe'])
           Commit          $env:GITHUB_SHA
           Branch          $env:GITHUB_REF_NAME
-          Configuration   $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=1
+          Configuration   $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=$env:BOTS_MODULE
           Boost           $boostDir
           OpenSSL         $cryptoLib
 
@@ -337,10 +357,7 @@ jobs:
             command line client. Put mysql.exe on PATH, set MySQLExecutable in
             worldserver.conf, or set Updates.EnableDatabases = 0 and apply
             Updater\sql\updates by hand.
-          * modules/Bots is compiled in but disabled until its settings from
-            bots.conf.dist are merged into worldserver.conf with Bots.Enable = 1,
-            and Updater\sql\modules\Bots\rbac_bots_command.sql is imported into
-            the auth database.
+        $botsNote
 
         GPL-3.0. World of Warcraft is a trademark of Blizzard Entertainment; this
         project is not affiliated with or endorsed by Blizzard Entertainment.
@@ -377,7 +394,7 @@ jobs:
 
         - Core version: ``$($versions['worldserver.exe'])``
         - Commit: ``$env:GITHUB_SHA`` on ``$env:GITHUB_REF_NAME``
-        - Configuration: $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=1
+        - Configuration: $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=$env:BOTS_MODULE
         - OpenSSL: ``$(Split-Path $cryptoLib -Leaf)``
 
         Includes both server binaries, the four client-data extractors, the
@@ -394,7 +411,7 @@ jobs:
         | Archive | ``$archiveName.zip`` ($size MB) |
         | Core version | ``$($versions['worldserver.exe'])`` |
         | Commit | ``$env:GITHUB_SHA`` |
-        | Configuration | $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=1 |
+        | Configuration | $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=$env:BOTS_MODULE |
         "@
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value (
           "`n<details><summary>Package contents ($($listing.Count) entries)</summary>`n`n" + '```' + "`n" +
