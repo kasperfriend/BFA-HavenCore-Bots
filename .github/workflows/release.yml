@@ -252,13 +252,8 @@ jobs:
         # the package is missing a runtime DLL.
         $versions = @{}
         foreach ($exe in 'worldserver.exe', 'bnetserver.exe') {
-          Push-Location $package
-          try {
-            $output = & ".\$exe" --version
-            $exitCode = $LASTEXITCODE
-          } finally {
-            Pop-Location
-          }
+          $output = & (Join-Path $package $exe) --version
+          $exitCode = $LASTEXITCODE
           $version = ($output | Out-String).Trim()
           Write-Host "$exe --version (exit $exitCode): $version"
           if ($exitCode -ne 0) {
@@ -363,13 +358,8 @@ jobs:
         # Server) writes a real zip and - unlike Compress-Archive - keeps the
         # empty ClientData\ and Logs\ folders in it.
         Rename-Item -LiteralPath $package -NewName $archiveName
-        Push-Location (Split-Path $package -Parent)
-        try {
-          & tar.exe -a -c -f $archivePath $archiveName
-          $tarExitCode = $LASTEXITCODE
-        } finally {
-          Pop-Location
-        }
+        & tar.exe -a -c -f $archivePath -C (Split-Path $package -Parent) $archiveName
+        $tarExitCode = $LASTEXITCODE
         if ($tarExitCode -ne 0) { throw "Creating the archive failed (exit code $tarExitCode)." }
 
         $size = [math]::Round((Get-Item -LiteralPath $archivePath).Length / 1MB, 1)
