@@ -131,7 +131,7 @@ jobs:
 
         Write-Host '--- dependencies CMake resolved ---'
         $resolved = Select-String -Path 'build\CMakeCache.txt' `
-          -Pattern '^(MYSQL_LIBRARY|MYSQL_INCLUDE_DIR|LIB_EAY_LIBRARY|SSL_EAY_LIBRARY|OPENSSL_INCLUDE_DIR|Boost_DIR|Boost_VERSION|CMAKE_INSTALL_PREFIX|SERVERS|SCRIPTS|TOOLS|BOTS_MODULE):' |
+          -Pattern '^(MYSQL_LIBRARY|MYSQL_INCLUDE_DIR|LIB_EAY[A-Z_]*|SSL_EAY[A-Z_]*|OPENSSL_INCLUDE_DIR|Boost_DIR|Boost_VERSION|CMAKE_INSTALL_PREFIX|SERVERS|SCRIPTS|TOOLS|BOTS_MODULE):' |
           ForEach-Object Line
         $resolved | ForEach-Object { Write-Host $_ }
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value (
@@ -187,8 +187,12 @@ jobs:
         # *_static.lib pair; only then are there no OpenSSL DLLs to ship.
         # cmake/macros/FindOpenSSL.cmake sets OPENSSL_CRYPTO_LIBRARY/OPENSSL_SSL_LIBRARY
         # as plain variables, so the cache only carries the find_library results.
-        $cryptoLib = Get-CacheValue @('LIB_EAY_LIBRARY_RELEASE', 'LIB_EAY_LIBRARY', 'OPENSSL_CRYPTO_LIBRARY')
-        $sslLib = Get-CacheValue @('SSL_EAY_LIBRARY_RELEASE', 'SSL_EAY_LIBRARY', 'OPENSSL_SSL_LIBRARY')
+        # CMake cache entries (cmake/macros/FindOpenSSL.cmake): the MSVC branch
+        # find_library()s LIB_EAY_RELEASE / SSL_EAY_RELEASE and derives
+        # OPENSSL_CRYPTO_LIBRARY only as a plain variable, so the real cache
+        # names come first.
+        $cryptoLib = Get-CacheValue @('LIB_EAY_RELEASE', 'LIB_EAY_LIBRARY_RELEASE', 'LIB_EAY', 'OPENSSL_CRYPTO_LIBRARY')
+        $sslLib = Get-CacheValue @('SSL_EAY_RELEASE', 'SSL_EAY_LIBRARY_RELEASE', 'SSL_EAY', 'OPENSSL_SSL_LIBRARY')
         $opensslName = if ($cryptoLib) { Split-Path $cryptoLib -Leaf } else { 'unknown' }
         Write-Host "OpenSSL crypto library: $cryptoLib"
         Write-Host "OpenSSL ssl library   : $sslLib"
