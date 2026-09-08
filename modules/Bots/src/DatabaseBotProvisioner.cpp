@@ -60,10 +60,23 @@ namespace Bots
 
     bool DatabaseBotProvisioner::EnsureParentAccount(std::string const& email, uint32& parentAccountId, std::string& failure)
     {
-        if (auto result = LoginDatabase.Query(
-                LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_ACCOUNT_ID_BY_EMAIL), email))
+        // DatabaseWorkerPool has no variadic prepared-statement Query: the
+        // parameter is bound on the statement, and Query(stmt) returns a
+        // PreparedQueryResult.
+        auto queryParentId = [&email]() -> uint32
         {
-            parentAccountId = (*result)[0].GetUInt32();
+            LoginDatabasePreparedStatement* select =
+                LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_ACCOUNT_ID_BY_EMAIL);
+            select->setString(0, email);
+            if (auto result = LoginDatabase.Query(select))
+                return (*result)[0].GetUInt32();
+
+            return 0;
+        };
+
+        if (uint32 const existing = queryParentId())
+        {
+            parentAccountId = existing;
             return true;
         }
 
@@ -74,10 +87,9 @@ namespace Bots
         stmt->setString(1, std::string());
         LoginDatabase.DirectExecute(stmt);
 
-        if (auto result = LoginDatabase.Query(
-                LoginDatabase.GetPreparedStatement(LOGIN_SEL_BNET_ACCOUNT_ID_BY_EMAIL), email))
+        if (uint32 const created = queryParentId())
         {
-            parentAccountId = (*result)[0].GetUInt32();
+            parentAccountId = created;
             return true;
         }
 
@@ -132,7 +144,7 @@ namespace Bots
         if (QueryResult result = CharacterDatabase.PQuery(
                 "SELECT guid FROM characters WHERE account = %u AND name = '%s'", accountId, characterName.c_str()))
         {
-            characterGuid = ObjectGuid::CreatePlayer((*result)[0].GetUInt64());
+            characterGuid = ObjectGuid::Create<HighGuid::Player>((*result)[0].GetUInt64());
             return true;
         }
 
