@@ -36,6 +36,10 @@ Our priorities include:
 - Implementing missing game content.
 - Improving scripting accuracy.
 - Enhancing database quality and overall stability.
+
+## This fork's BOTS
+
+I am attempting to add Playerbots functionality from AzerothCore or at least similar. This fork uses A LOT OF AI, and it's directly stated. My goal is to add this as module, fully independent from source.
  
 ## Contributing
  
