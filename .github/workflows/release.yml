@@ -160,7 +160,7 @@ jobs:
 
         Write-Host '--- dependencies CMake resolved ---'
         $resolved = Select-String -Path 'build\CMakeCache.txt' `
-          -Pattern '^(MYSQL_LIBRARY|MYSQL_INCLUDE_DIR|OPENSSL_CRYPTO_LIBRARY|OPENSSL_SSL_LIBRARY|OPENSSL_INCLUDE_DIR|Boost_DIR|Boost_VERSION|CMAKE_INSTALL_PREFIX|SERVERS|SCRIPTS|TOOLS|BOTS_MODULE):' |
+          -Pattern '^(MYSQL_LIBRARY|MYSQL_INCLUDE_DIR|LIB_EAY_LIBRARY|SSL_EAY_LIBRARY|OPENSSL_INCLUDE_DIR|Boost_DIR|Boost_VERSION|CMAKE_INSTALL_PREFIX|SERVERS|SCRIPTS|TOOLS|BOTS_MODULE):' |
           ForEach-Object Line
         $resolved | ForEach-Object { Write-Host $_ }
         Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value (
@@ -203,17 +203,22 @@ jobs:
         Copy-Item -LiteralPath (Join-Path $env:MYSQL_ROOT 'lib\libmysql.dll') -Destination $package -Force
         Write-Host "Shipped libmysql.dll from $env:MYSQL_ROOT"
 
-        function Get-CacheValue([string]$name) {
-          $line = Select-String -Path 'build\CMakeCache.txt' -Pattern "^$([regex]::Escape($name)):([A-Z]+)=(.*)$" |
-                    Select-Object -First 1
-          if ($line) { return $line.Matches[0].Groups[2].Value }
+        function Get-CacheValue([string[]]$names) {
+          foreach ($name in $names) {
+            $line = Select-String -Path 'build\CMakeCache.txt' -Pattern "^$([regex]::Escape($name)):([A-Z]+)=(.*)$" |
+                      Select-Object -First 1
+            if ($line) { return $line.Matches[0].Groups[2].Value }
+          }
           return ''
         }
 
         # OpenSSL is linked through import libraries unless CMake picked up the
         # *_static.lib pair; only then are there no OpenSSL DLLs to ship.
-        $cryptoLib = Get-CacheValue 'OPENSSL_CRYPTO_LIBRARY'
-        $sslLib = Get-CacheValue 'OPENSSL_SSL_LIBRARY'
+        # cmake/macros/FindOpenSSL.cmake sets OPENSSL_CRYPTO_LIBRARY/OPENSSL_SSL_LIBRARY
+        # as plain variables, so the cache only carries the find_library results.
+        $cryptoLib = Get-CacheValue @('LIB_EAY_LIBRARY_RELEASE', 'LIB_EAY_LIBRARY', 'OPENSSL_CRYPTO_LIBRARY')
+        $sslLib = Get-CacheValue @('SSL_EAY_LIBRARY_RELEASE', 'SSL_EAY_LIBRARY', 'OPENSSL_SSL_LIBRARY')
+        $opensslName = if ($cryptoLib) { Split-Path $cryptoLib -Leaf } else { 'unknown' }
         Write-Host "OpenSSL crypto library: $cryptoLib"
         Write-Host "OpenSSL ssl library   : $sslLib"
         if ($cryptoLib -like '*_static.lib' -and $sslLib -like '*_static.lib') {
@@ -395,7 +400,7 @@ jobs:
         - Core version: ``$($versions['worldserver.exe'])``
         - Commit: ``$env:GITHUB_SHA`` on ``$env:GITHUB_REF_NAME``
         - Configuration: $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=$env:BOTS_MODULE
-        - OpenSSL: ``$(Split-Path $cryptoLib -Leaf)``
+        - OpenSSL: ``$opensslName``
 
         Includes both server binaries, the four client-data extractors, the
         configuration templates and the SQL update tree. It does **not** include
