@@ -129,9 +129,12 @@ jobs:
         if ($LASTEXITCODE -ne 0) { throw "CMake configure failed (exit code $LASTEXITCODE)." }
 
         Write-Host '--- dependencies CMake resolved ---'
-        Select-String -Path 'build\CMakeCache.txt' `
+        $resolved = Select-String -Path 'build\CMakeCache.txt' `
           -Pattern '^(MYSQL_LIBRARY|MYSQL_INCLUDE_DIR|OPENSSL_CRYPTO_LIBRARY|OPENSSL_SSL_LIBRARY|OPENSSL_INCLUDE_DIR|Boost_DIR|Boost_VERSION|CMAKE_INSTALL_PREFIX|SERVERS|SCRIPTS|TOOLS|BOTS_MODULE):' |
           ForEach-Object Line
+        $resolved | ForEach-Object { Write-Host $_ }
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value (
+          '## Resolved dependencies' + "`n`n" + '```' + "`n" + ($resolved -join "`n") + "`n" + '```')
 
     - name: Build and install
       if: ${{ !false }}
@@ -228,13 +231,8 @@ jobs:
         # the package is missing a runtime DLL.
         $versions = @{}
         foreach ($exe in 'worldserver.exe', 'bnetserver.exe') {
-          Push-Location $package
-          try {
-            $output = & ".\$exe" --version
-            $exitCode = $LASTEXITCODE
-          } finally {
-            Pop-Location
-          }
+          $output = & (Join-Path $package $exe) --version
+          $exitCode = $LASTEXITCODE
           $version = ($output | Out-String).Trim()
           Write-Host "$exe --version (exit $exitCode): $version"
           if ($exitCode -ne 0) {
@@ -326,9 +324,10 @@ jobs:
         Set-Content -LiteralPath (Join-Path $package 'README.txt') -Value $readme -Encoding utf8
 
         Write-Host '--- package contents ---'
-        Get-ChildItem -LiteralPath $package -Recurse | ForEach-Object {
-          Write-Host ("{0,12}  {1}" -f $_.Length, $_.FullName.Substring($package.Length + 1))
+        $listing = Get-ChildItem -LiteralPath $package -Recurse | ForEach-Object {
+          '{0,12}  {1}' -f $_.Length, $_.FullName.Substring($package.Length + 1)
         }
+        $listing | ForEach-Object { Write-Host $_ }
 
         $archiveName = "BFA-HavenCore-$($env:GITHUB_SHA.Substring(0, 7))-win-x64"
         New-Item -ItemType Directory -Force -Path $env:DIST_DIR | Out-Null
@@ -339,13 +338,8 @@ jobs:
         # Server) writes a real zip and - unlike Compress-Archive - keeps the
         # empty ClientData\ and Logs\ folders in it.
         Rename-Item -LiteralPath $package -NewName $archiveName
-        Push-Location (Split-Path $package -Parent)
-        try {
-          & tar.exe -a -c -f $archivePath $archiveName
-          $tarExitCode = $LASTEXITCODE
-        } finally {
-          Pop-Location
-        }
+        & tar.exe -a -c -f $archivePath -C (Split-Path $package -Parent) $archiveName
+        $tarExitCode = $LASTEXITCODE
         if ($tarExitCode -ne 0) { throw "Creating the archive failed (exit code $tarExitCode)." }
 
         $size = [math]::Round((Get-Item -LiteralPath $archivePath).Length / 1MB, 1)
@@ -378,6 +372,9 @@ jobs:
         | Commit | ``$env:GITHUB_SHA`` |
         | Configuration | $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=1 |
         "@
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value (
+          "`n<details><summary>Package contents ($($listing.Count) entries)</summary>`n`n" + '```' + "`n" +
+          ($listing -join "`n") + "`n" + '```' + "`n</details>")
 
     - name: Upload package artifact
       if: ${{ !false }}
