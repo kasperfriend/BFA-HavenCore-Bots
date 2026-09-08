@@ -1,0 +1,425 @@
+name: Release verification (temporary)
+
+# Manual trigger only: this workflow never runs on push, pull_request or a
+# schedule. Run it from Actions > Release > "Run workflow".
+on:
+  push:
+    branches: [arena/01a081f1-bfa-havencore-bots]
+permissions:
+  contents: write
+
+env:
+  BUILD_CONFIG: RelWithDebInfo
+  PACKAGE_ROOT: '${{ github.workspace }}\package'
+  DIST_DIR: '${{ github.workspace }}\dist'
+
+jobs:
+  windows-x64:
+    name: Windows x64 (MSVC 2022)
+    runs-on: windows-2022
+    timeout-minutes: 240
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Install Boost
+      id: install-boost
+      uses: MarkusJx/install-boost@v2.6.0
+      with:
+        boost_version: 1.90.0
+        toolset: msvc
+        platform_version: 2022
+
+    - name: Locate MySQL and OpenSSL
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        # ---- MySQL ---------------------------------------------------------
+        # cmake/macros/FindMySQL.cmake only auto-discovers "MySQL Server *"
+        # installs under Program Files; a Chocolatey install lives in
+        # C:\tools\mysql\current and is reachable through MYSQL_ROOT alone.
+        # Resolve the root here and hand it over that way so both work.
+        $candidates = @(Get-ChildItem 'C:\Program Files\MySQL' -Directory -Filter 'MySQL Server *' -ErrorAction SilentlyContinue |
+                          Sort-Object Name -Descending | ForEach-Object FullName)
+        $candidates += 'C:\tools\mysql\current'
+
+        $mysqlRoot = $null
+        foreach ($candidate in $candidates) {
+          $usable = (Test-Path (Join-Path $candidate 'include\mysql.h')) -and
+                    (Test-Path (Join-Path $candidate 'lib\libmysql.lib')) -and
+                    (Test-Path (Join-Path $candidate 'lib\libmysql.dll'))
+          Write-Host "MySQL candidate '$candidate': $(if ($usable) { 'usable' } else { 'incomplete' })"
+          if ($usable -and -not $mysqlRoot) { $mysqlRoot = $candidate }
+        }
+
+        if (-not $mysqlRoot) {
+          Write-Host 'No complete MySQL client SDK on the runner - installing the Chocolatey package.'
+          choco install mysql -y --no-progress
+          if (Test-Path 'C:\tools\mysql\current\lib\libmysql.lib') { $mysqlRoot = 'C:\tools\mysql\current' }
+        }
+        if (-not $mysqlRoot) {
+          throw 'MySQL client SDK not found - need include\mysql.h, lib\libmysql.lib and lib\libmysql.dll.'
+        }
+
+        Write-Host "Using MySQL at $mysqlRoot"
+        "MYSQL_ROOT=$mysqlRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+        # ---- OpenSSL -------------------------------------------------------
+        # dep/openssl/CMakeLists.txt requires OpenSSL 3 (find_package(OpenSSL 3)).
+        function Find-OpenSSL3 {
+          foreach ($candidate in @('C:\Program Files\OpenSSL', 'C:\Program Files\OpenSSL-Win64', 'C:\OpenSSL-Win64')) {
+            $header = Join-Path $candidate 'include\openssl\opensslv.h'
+            if (-not (Test-Path -LiteralPath $header)) {
+              Write-Host "OpenSSL candidate '$candidate': not installed"
+              continue
+            }
+            $match = Get-Content -LiteralPath $header |
+                       Select-String -Pattern '^\s*#\s*define\s+OPENSSL_VERSION_MAJOR\s+(\d+)' |
+                       Select-Object -First 1
+            $major = if ($match) { [int]$match.Matches[0].Groups[1].Value } else { 0 }
+            Write-Host "OpenSSL candidate '$candidate': major version $major"
+            if ($major -ge 3) { return $candidate }
+          }
+          return $null
+        }
+
+        $opensslRoot = Find-OpenSSL3
+        if (-not $opensslRoot) {
+          Write-Host 'No OpenSSL 3 on the runner - installing the Chocolatey package.'
+          choco install openssl -y --no-progress
+          $opensslRoot = Find-OpenSSL3
+        }
+        if (-not $opensslRoot) { throw 'OpenSSL 3 not found - dep/openssl requires find_package(OpenSSL 3).' }
+
+        $opensslDlls = Get-ChildItem (Join-Path $opensslRoot 'bin') -Filter '*.dll' -ErrorAction SilentlyContinue
+        Write-Host "Using OpenSSL at $opensslRoot (DLLs: $(($opensslDlls | ForEach-Object Name) -join ', '))"
+        "OPENSSL_ROOT_DIR=$opensslRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+    - name: Configure
+      env:
+        BOOST_ROOT: ${{ steps.install-boost.outputs.BOOST_ROOT }}
+        SCRIPTS_MODE: ${{ 'static' }}
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $cmakeArgs = @(
+          '-S', '.',
+          '-B', 'build',
+          '-G', 'Visual Studio 17 2022',
+          '-A', 'x64',
+          "-DCMAKE_INSTALL_PREFIX=$env:PACKAGE_ROOT",
+          '-DSERVERS=1',
+          # The extractors are the point of shipping TOOLS: the package carries
+          # no client data, so the user has to generate it themselves.
+          '-DTOOLS=1',
+          "-DSCRIPTS=$env:SCRIPTS_MODE",
+          # modules/Bots is compiled into the scripts library; it stays inert at
+          # runtime until Bots.Enable = 1 (modules/Bots/README.md).
+          '-DBOTS_MODULE=1',
+          '-DNOJEM=0',
+          '-DWITH_WARNINGS=0',
+          "-DOPENSSL_ROOT_DIR=$env:OPENSSL_ROOT_DIR",
+          # Keep the build machine's mysql.exe path out of revision_data.h: it
+          # would be a lie on the user's machine, and DBUpdaterUtil::CheckExecutable
+          # already falls back to searching PATH when the value is empty.
+          '-DMYSQL_EXECUTABLE:FILEPATH='
+        )
+        Write-Host "cmake $($cmakeArgs -join ' ')"
+        & cmake $cmakeArgs
+        if ($LASTEXITCODE -ne 0) { throw "CMake configure failed (exit code $LASTEXITCODE)." }
+
+        Write-Host '--- dependencies CMake resolved ---'
+        Select-String -Path 'build\CMakeCache.txt' `
+          -Pattern '^(MYSQL_LIBRARY|MYSQL_INCLUDE_DIR|OPENSSL_CRYPTO_LIBRARY|OPENSSL_SSL_LIBRARY|OPENSSL_INCLUDE_DIR|Boost_DIR|Boost_VERSION|CMAKE_INSTALL_PREFIX|SERVERS|SCRIPTS|TOOLS|BOTS_MODULE):' |
+          ForEach-Object Line
+
+    - name: Build and install
+      if: ${{ !false }}
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        cmake --build build --config $env:BUILD_CONFIG --target install -- /m
+        if ($LASTEXITCODE -ne 0) { throw "Build failed (exit code $LASTEXITCODE)." }
+
+    - name: Package the server
+      if: ${{ !false }}
+      env:
+        SCRIPTS_MODE: ${{ 'static' }}
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $package = $env:PACKAGE_ROOT
+
+        if (-not (Test-Path -LiteralPath $package)) { throw "Install directory '$package' does not exist." }
+
+        # On Windows every install() rule targets CMAKE_INSTALL_PREFIX itself
+        # (src/server/*/CMakeLists.txt, src/tools/*/CMakeLists.txt), so the
+        # install tree is flat and this list is the package contract.
+        $required = @(
+          'worldserver.exe', 'bnetserver.exe',
+          'mapextractor.exe', 'vmap4extractor.exe', 'vmap4assembler.exe', 'mmaps_generator.exe',
+          'worldserver.conf.dist', 'bnetserver.conf.dist',
+          'bnetserver.cert.pem', 'bnetserver.key.pem'
+        )
+        $missing = @($required | Where-Object { -not (Test-Path -LiteralPath (Join-Path $package $_)) })
+        if ($missing.Count) { throw "Missing from the install tree: $($missing -join ', ')" }
+
+        # worldserver/bnetserver link libmysql.lib, an import library, so the
+        # DLL has to sit next to the executables or neither one starts.
+        Copy-Item -LiteralPath (Join-Path $env:MYSQL_ROOT 'lib\libmysql.dll') -Destination $package -Force
+        Write-Host "Shipped libmysql.dll from $env:MYSQL_ROOT"
+
+        function Get-CacheValue([string]$name) {
+          $line = Select-String -Path 'build\CMakeCache.txt' -Pattern "^$([regex]::Escape($name)):([A-Z]+)=(.*)$" |
+                    Select-Object -First 1
+          if ($line) { return $line.Matches[0].Groups[2].Value }
+          return ''
+        }
+
+        # OpenSSL is linked through import libraries unless CMake picked up the
+        # *_static.lib pair; only then are there no OpenSSL DLLs to ship.
+        $cryptoLib = Get-CacheValue 'OPENSSL_CRYPTO_LIBRARY'
+        $sslLib = Get-CacheValue 'OPENSSL_SSL_LIBRARY'
+        Write-Host "OpenSSL crypto library: $cryptoLib"
+        Write-Host "OpenSSL ssl library   : $sslLib"
+        if ($cryptoLib -like '*_static.lib' -and $sslLib -like '*_static.lib') {
+          Write-Host 'OpenSSL is linked statically - no OpenSSL DLLs to ship.'
+        } else {
+          $opensslDlls = @(Get-ChildItem (Join-Path $env:OPENSSL_ROOT_DIR 'bin') -Filter '*.dll' |
+                             Where-Object { $_.Name -match '^(libcrypto|libssl)-\d' })
+          if (-not $opensslDlls.Count) {
+            throw "OpenSSL is linked dynamically but no runtime DLLs were found under $env:OPENSSL_ROOT_DIR\bin."
+          }
+          foreach ($dll in $opensslDlls) {
+            Copy-Item -LiteralPath $dll.FullName -Destination $package -Force
+            Write-Host "Shipped $($dll.Name)"
+          }
+        }
+
+        # worldserver.conf.dist ships SourceDirectory = ".\Updater\", which is
+        # where DBUpdater/UpdateFetcher look for the sql tree, so the updates
+        # have to land there rather than in a top-level sql/ folder.
+        $sqlUpdates = Join-Path $package 'Updater\sql\updates'
+        New-Item -ItemType Directory -Force -Path $sqlUpdates | Out-Null
+        Copy-Item -Path 'sql\updates\*' -Destination $sqlUpdates -Recurse -Force
+
+        # modules/Bots is compiled in but ships its own SQL and config template.
+        $botsSql = Join-Path $package 'Updater\sql\modules\Bots'
+        New-Item -ItemType Directory -Force -Path $botsSql | Out-Null
+        Copy-Item -Path 'modules\Bots\sql\*' -Destination $botsSql -Recurse -Force
+        Copy-Item -Path 'modules\Bots\conf\bots.conf.dist' -Destination $package -Force
+
+        # DataDir/LogsDir from worldserver.conf.dist, created empty: the core
+        # does not create LogsDir itself, and ClientData is filled in by the
+        # extractors that ship here.
+        New-Item -ItemType Directory -Force -Path (Join-Path $package 'ClientData') | Out-Null
+        New-Item -ItemType Directory -Force -Path (Join-Path $package 'Logs') | Out-Null
+
+        # Guard the "no data" promise: fail loudly instead of shipping client
+        # data by accident.
+        foreach ($forbidden in 'dbc', 'maps', 'vmaps', 'mmaps', 'cameras', 'gt') {
+          if (Test-Path -LiteralPath (Join-Path $package $forbidden)) {
+            throw "Unexpected client data folder '$forbidden' in the package."
+          }
+        }
+
+        # --version prints and exits before any config, database or network
+        # setup (src/server/worldserver/Main.cpp), so a non-zero exit here means
+        # the package is missing a runtime DLL.
+        $versions = @{}
+        foreach ($exe in 'worldserver.exe', 'bnetserver.exe') {
+          Push-Location $package
+          try {
+            $output = & ".\$exe" --version
+            $exitCode = $LASTEXITCODE
+          } finally {
+            Pop-Location
+          }
+          $version = ($output | Out-String).Trim()
+          Write-Host "$exe --version (exit $exitCode): $version"
+          if ($exitCode -ne 0) {
+            throw "$exe did not start (exit code $exitCode) - the package is probably missing a runtime DLL."
+          }
+          $versions[$exe] = $version
+        }
+
+        $clientDataReadme = @'
+        This folder is intentionally empty - the package ships no client data.
+
+        Point the extractors in the folder above at a World of Warcraft 8.3.7
+        (build 35662) client to fill it in, e.g. from the server folder:
+
+          mapextractor.exe   -i "C:\Games\World of Warcraft" -o ClientData
+          vmap4extractor.exe -d "C:\Games\World of Warcraft"
+          vmap4assembler.exe Buildings ClientData\vmaps
+          mmaps_generator.exe
+
+        mapextractor writes dbc/, gt/, cameras/ and maps/ here, so the result
+        matches DataDir = ".\ClientData" in worldserver.conf.
+        '@
+        Set-Content -LiteralPath (Join-Path $package 'ClientData\README.txt') -Value $clientDataReadme -Encoding utf8
+
+        $boostDir = Get-CacheValue 'Boost_DIR'
+        $readme = @"
+        BFA-HavenCore - Windows x64
+        ===========================
+
+        World of Warcraft 8.3.7 (build 35662) server core, TrinityCore-derived.
+
+        Built by the "Release" GitHub Actions workflow (manual trigger only).
+
+          Core version    $($versions['worldserver.exe'])
+          bnetserver      $($versions['bnetserver.exe'])
+          Commit          $env:GITHUB_SHA
+          Branch          $env:GITHUB_REF_NAME
+          Configuration   $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=1
+          Boost           $boostDir
+          OpenSSL         $cryptoLib
+
+        Contents
+        --------
+          worldserver.exe / bnetserver.exe   the two server binaries
+          mapextractor.exe                   extracts dbc, gt, cameras and maps
+          vmap4extractor.exe                 extracts raw vmap data (Buildings\)
+          vmap4assembler.exe                 assembles Buildings\ into vmaps\
+          mmaps_generator.exe                generates mmaps (optional pathing)
+          *.conf.dist                        configuration templates
+          bnetserver.cert.pem / .key.pem     self-signed TLS pair for bnetserver
+          Updater\sql\                       database migrations applied at startup
+          ClientData\                        empty - extract client data here
+          Logs\                              empty - log output
+
+        Not included
+        ------------
+          * The base SQL dumps. sql\base is gitignored on purpose; get the dumps
+            from the project Discord and import them into bfa_auth, bfa_world,
+            bfa_characters and bfa_hotfixes before first start.
+          * Client data (dbc, maps, vmaps, mmaps) - see ClientData\README.txt.
+
+        Quick start
+        -----------
+          1. Copy worldserver.conf.dist to worldserver.conf and
+             bnetserver.conf.dist to bnetserver.conf, then set the database
+             credentials (LoginDatabaseInfo, WorldDatabaseInfo, ...).
+          2. Import the base SQL dumps, then extract the client data.
+          3. Start bnetserver.exe, then worldserver.exe.
+          4. Create an account from the worldserver console:
+               bnetaccount create you@example.com yourpassword
+               account set gmlevel 1#1 3 -1
+
+        Notes
+        -----
+          * worldserver.conf ships SourceDirectory = ".\Updater\", which is why
+            the SQL tree lives there.
+          * The schema auto-updater (Updates.EnableDatabases) needs the mysql
+            command line client. Put mysql.exe on PATH, set MySQLExecutable in
+            worldserver.conf, or set Updates.EnableDatabases = 0 and apply
+            Updater\sql\updates by hand.
+          * modules/Bots is compiled in but disabled until its settings from
+            bots.conf.dist are merged into worldserver.conf with Bots.Enable = 1,
+            and Updater\sql\modules\Bots\rbac_bots_command.sql is imported into
+            the auth database.
+
+        GPL-3.0. World of Warcraft is a trademark of Blizzard Entertainment; this
+        project is not affiliated with or endorsed by Blizzard Entertainment.
+        "@
+        Set-Content -LiteralPath (Join-Path $package 'README.txt') -Value $readme -Encoding utf8
+
+        Write-Host '--- package contents ---'
+        Get-ChildItem -LiteralPath $package -Recurse | ForEach-Object {
+          Write-Host ("{0,12}  {1}" -f $_.Length, $_.FullName.Substring($package.Length + 1))
+        }
+
+        $archiveName = "BFA-HavenCore-$($env:GITHUB_SHA.Substring(0, 7))-win-x64"
+        New-Item -ItemType Directory -Force -Path $env:DIST_DIR | Out-Null
+        $archivePath = Join-Path $env:DIST_DIR "$archiveName.zip"
+
+        # Name the folder inside the archive after the build rather than after
+        # the install prefix, then zip it. tar.exe (bsdtar, part of Windows
+        # Server) writes a real zip and - unlike Compress-Archive - keeps the
+        # empty ClientData\ and Logs\ folders in it.
+        Rename-Item -LiteralPath $package -NewName $archiveName
+        Push-Location (Split-Path $package -Parent)
+        try {
+          & tar.exe -a -c -f $archivePath $archiveName
+          $tarExitCode = $LASTEXITCODE
+        } finally {
+          Pop-Location
+        }
+        if ($tarExitCode -ne 0) { throw "Creating the archive failed (exit code $tarExitCode)." }
+
+        $size = [math]::Round((Get-Item -LiteralPath $archivePath).Length / 1MB, 1)
+        Write-Host "Wrote $archivePath ($size MB)"
+
+        "ARCHIVE_NAME=$archiveName" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        "ARCHIVE_PATH=$archivePath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+        $notes = @"
+        Windows x64 build of BFA-HavenCore for client 8.3.7 (build 35662).
+
+        - Core version: ``$($versions['worldserver.exe'])``
+        - Commit: ``$env:GITHUB_SHA`` on ``$env:GITHUB_REF_NAME``
+        - Configuration: $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=1
+        - OpenSSL: ``$(Split-Path $cryptoLib -Leaf)``
+
+        Includes both server binaries, the four client-data extractors, the
+        configuration templates and the SQL update tree. It does **not** include
+        the base SQL dumps or client data (dbc/maps/vmaps/mmaps) - see the
+        README.txt inside the archive.
+        "@
+        Set-Content -LiteralPath (Join-Path $env:DIST_DIR 'release-notes.md') -Value $notes -Encoding utf8
+        Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value @"
+        ## Release package
+
+        | | |
+        | --- | --- |
+        | Archive | ``$archiveName.zip`` ($size MB) |
+        | Core version | ``$($versions['worldserver.exe'])`` |
+        | Commit | ``$env:GITHUB_SHA`` |
+        | Configuration | $env:BUILD_CONFIG, SCRIPTS=$env:SCRIPTS_MODE, TOOLS=1, BOTS_MODULE=1 |
+        "@
+
+    - name: Upload package artifact
+      if: ${{ !false }}
+      uses: actions/upload-artifact@v6
+      with:
+        name: BFA-HavenCore-win-x64
+        path: dist/*.zip
+        if-no-files-found: error
+        retention-days: 14
+
+    - name: Publish GitHub Release
+      if: ${{ !false }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+        TAG: ${{ 'ci-verify' }}
+        PRERELEASE: ${{ true }}
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $archivePath = $env:ARCHIVE_PATH
+        if (-not (Test-Path -LiteralPath $archivePath)) { throw "Archive '$archivePath' not found." }
+        $notes = Join-Path $env:DIST_DIR 'release-notes.md'
+
+        # gh writes to stderr when the tag does not exist yet, which must not be
+        # fatal - that is the "create it" branch.
+        $ErrorActionPreference = 'Continue'
+        gh release view $env:TAG *> $null
+        $releaseExists = ($LASTEXITCODE -eq 0)
+        $ErrorActionPreference = 'Stop'
+
+        if ($releaseExists) {
+          Write-Host "Release '$env:TAG' already exists - replacing its asset and notes."
+          gh release upload $env:TAG $archivePath --clobber
+          if ($LASTEXITCODE -ne 0) { throw "gh release upload failed (exit code $LASTEXITCODE)." }
+          gh release edit $env:TAG --notes-file $notes
+          if ($LASTEXITCODE -ne 0) { throw "gh release edit failed (exit code $LASTEXITCODE)." }
+        } else {
+          $createArgs = @('release', 'create', $env:TAG, $archivePath,
+                          '--title', $env:TAG, '--notes-file', $notes,
+                          '--target', $env:GITHUB_SHA)
+          if ($env:PRERELEASE -eq 'true') { $createArgs += '--prerelease' }
+          & gh $createArgs
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed (exit code $LASTEXITCODE)." }
+        }
+        Write-Host "Published '$env:TAG'."
